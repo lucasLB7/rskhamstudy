@@ -1,8 +1,13 @@
+# Dependancies and critical libraries (see requirements.txt)
+
 from flask import Flask, render_template, request, redirect, url_for, session, abort, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from pathlib import Path
 import random, os
 from models import db, User, Category, Question
+from sqlalchemy import func
+from functools import wraps
+from datetime import datetime, timezone
 
 app = Flask(__name__, instance_relative_config=True)
 app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
@@ -87,12 +92,76 @@ def _clear_quiz_session():
     ]:
         session.pop(k, None)
 
-# ---------- Routes ----------
-@app.route('/')
-def index():
-    return render_template("index.html")
+# ---------- Level helpers (permissions & synonyms) ----------
+LEVEL_SYNONYMS = {
+    # Friendly labels → stored category names
+    "Novice": "Foundation",
+    "Foundation": "Foundation",
+    "Intermediary": "Intermediary",
+    "Full": "Full licence",
+    "Full license": "Full licence",
+    "Full licence": "Full licence",
+}
 
-# Auth ---------
+def normalize_level(level: str | None) -> str | None:
+    if not level:
+        return None
+    return LEVEL_SYNONYMS.get(level.strip(), level.strip())
+
+def allowed_category_names(user_level: str | None) -> set[str]:
+    """
+    Rules:
+      - Foundation/Novice -> {'Foundation'}
+      - Intermediary      -> {'Foundation', 'Intermediary'}
+      - Full licence      -> all categories except 'Unassigned'
+      - None/unknown      -> empty set
+    """
+    user_level = normalize_level(user_level)
+    all_names = [c.name for c in Category.query.order_by(Category.name.asc()).all()]
+    visible = [n for n in all_names if n != "Unassigned"]
+
+    if user_level == "Foundation":
+        allowed = {"Foundation"}
+    elif user_level == "Intermediary":
+        allowed = {"Foundation", "Intermediary"}
+    elif user_level == "Full licence":
+        allowed = set(visible)
+    else:
+        allowed = set()
+
+    return allowed & set(visible)
+
+# ---------- Auth & guards ----------
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for('login', next=request.path))
+        if not current_user.is_admin:
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapper
+
+# ---------- Routes ----------
+
+# Landing: require login
+@app.route('/')
+@login_required
+def index():
+    level = normalize_level(getattr(current_user, "level", None))
+    # Hide "Unassigned" from user selection
+    categories = [c for c in Category.query.order_by(Category.name.asc()).all() if c.name != "Unassigned"]
+    last_login = session.get("last_login_display")  # may be None on first login
+    allowed = allowed_category_names(level)  # set[str]
+    return render_template(
+        "index.html",
+        level=level,
+        categories=categories,
+        last_login=last_login,
+        allowed_names=allowed,
+    )
+
+# Login/Logout
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -106,10 +175,32 @@ def login():
         login_user(user)
         flash("Welcome back!", "success")
 
-        # Prefer ?next=... if present; otherwise admins to /admin, users to /
+        # --- Last login handling ---
+        # If your User model later has a DateTime column `last_login_at`,
+        # we'll use it. Otherwise, we fall back to session-only storage.
+        fmt = "%b %d, %Y %H:%M"
+        prev_display = None
+        try:
+            if hasattr(User, "last_login_at"):
+                prev = getattr(user, "last_login_at", None)
+                if prev:
+                    try:
+                        prev_display = prev.astimezone().strftime(fmt)
+                    except Exception:
+                        prev_display = prev.strftime(fmt)
+                user.last_login_at = datetime.now(timezone.utc)
+                db.session.commit()
+            else:
+                prev_display = session.get("last_login_current")
+                session["last_login_current"] = datetime.now().strftime(fmt)
+        except Exception:
+            prev_display = session.get("last_login_current")
+        session["last_login_display"] = prev_display
+        # --- /Last login handling ---
+
         next_url = request.args.get('next')
         if not next_url:
-            next_url = url_for('admin_home') if user.is_admin else url_for('index')
+            next_url = url_for('admin_home') if user.is_admin else url_for('start', mode='study')
         return redirect(next_url)
 
     return render_template("login.html")
@@ -119,35 +210,68 @@ def login():
 def logout():
     logout_user()
     flash("Signed out", "info")
+    return redirect(url_for('login'))
+
+@app.route('/me/level', methods=['POST'])
+@login_required
+def update_level():
+    # Accept friendly labels (e.g., "Novice") and map to stored category names.
+    raw_level = (request.form.get('level') or '').strip()
+    normalized = normalize_level(raw_level)
+    if not raw_level:
+        normalized = None
+
+    # Validate against existing categories (or allow None to clear)
+    if normalized and not Category.query.filter_by(name=normalized).first():
+        flash("Invalid level.", "danger")
+        return redirect(url_for('index'))
+
+    current_user.level = normalized
+    db.session.commit()
+    flash("Level updated.", "success")
     return redirect(url_for('index'))
 
-# Admin decorator
-from functools import wraps
-def admin_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not current_user.is_authenticated:
-            # redirect unauthenticated users to login with ?next=
-            return redirect(url_for('login', next=request.path))
-        if not current_user.is_admin:
-            abort(403)
-        return fn(*args, **kwargs)
-    return wrapper
-
-# Start quiz -----
+# Start quiz (requires login)
 @app.route('/start/<mode>')
+@login_required
 def start(mode):
-    """Optionally pass ?cat=Foundation. If user has a level and no ?cat given, use their level."""
-    cat_name = request.args.get("cat")
-    if not cat_name and current_user.is_authenticated and current_user.level:
-        cat_name = current_user.level
+    """
+    Enforce level permissions. ?cat= is used only if within user's allowed set.
+    Otherwise we fall back to the user's own level (if permitted), else show a message.
+    """
+    req_cat = request.args.get("cat") or None
+    user_level = normalize_level(getattr(current_user, "level", None))
+    allowed = allowed_category_names(user_level)
 
+    # Choose category: requested if allowed, else user's level if allowed, else none
+    cat_name = None
+    if req_cat:
+        if req_cat in allowed:
+            cat_name = req_cat
+        else:
+            if user_level in allowed:
+                cat_name = user_level
+                flash("That category is not permitted for your level. Using your default level instead.", "warning")
+            else:
+                flash("No permitted categories for your account. Ask an admin to assign a level.", "danger")
+    else:
+        if user_level in allowed:
+            cat_name = user_level
+        elif allowed:
+            # Edge-case: user has allowed categories but no level string set
+            cat_name = sorted(allowed)[0]
+        else:
+            flash("No permitted categories for your account. Ask an admin to assign a level.", "danger")
+
+    # Resolve category id (if chosen)
     cat_id = None
     if cat_name:
-        cat = Category.query.filter_by(name=cat_name).first()
-        if not cat:
+        cat_row = Category.query.filter_by(name=cat_name).first()
+        if not cat_row:
             abort(404)
-        cat_id = cat.id
+        cat_id = cat_row.id
+    else:
+        return redirect(url_for('index'))
 
     base = Question.query
     if cat_id:
@@ -174,6 +298,7 @@ def start(mode):
     return redirect(url_for('quiz'))
 
 @app.route('/quiz', methods=['GET', 'POST'])
+@login_required
 def quiz():
     mode = session.get('mode', 'study')
     cat_id = session.get('cat_id', None)
@@ -255,6 +380,7 @@ def quiz():
     )
 
 @app.route('/summary')
+@login_required
 def summary():
     mode = session.get('mode', 'study')
     total_in_session = session.get('total_in_session', 0)
@@ -292,6 +418,7 @@ def summary():
     )
 
 @app.route('/redo_wrongs')
+@login_required
 def redo_wrongs():
     wrong_ids = [int(x) for x in session.get('wrong_ids', [])]
     if not wrong_ids:
@@ -309,8 +436,6 @@ def redo_wrongs():
     return redirect(url_for('quiz'))
 
 # -------- Admin: dashboard, users, questions ----------
-from jinja2 import TemplateNotFound
-
 @app.route('/admin')
 @admin_required
 def admin_home():
@@ -318,28 +443,25 @@ def admin_home():
         "users": User.query.count(),
         "questions": Question.query.count(),
         "categories": Category.query.count(),
+        "unassigned": Question.query.filter_by(category_id=None).count(),
     }
-    try:
-        html = render_template("admin/dashboard.html", stats=stats)
-        # If the template renders to empty/whitespace (e.g., block name mismatch), show fallback
-        if not (html or "").strip():
-            return (
-                "<h3>Admin dashboard (empty template)</h3>"
-                f"<pre>{stats}</pre>"
-                '<p>Your <code>templates/admin/dashboard.html</code> rendered empty. '
-                'If you use <code>{% extends \"base.html\" %}</code>, make sure the block name matches your base '
-                '(e.g., <code>{% block content %}</code> / <code>{% endblock %}</code>).</p>',
-                200, {"Content-Type": "text/html"}
-            )
-        return html
-    except TemplateNotFound:
-        # Missing template fallback
-        return (
-            "<h3>Admin dashboard (no template found)</h3>"
-            f"<pre>{stats}</pre>"
-            '<p>Create <code>templates/admin/dashboard.html</code> to style this.</p>',
-            200, {"Content-Type": "text/html"}
-        )
+    # Questions per category (includes 0-count categories)
+    by_cat = (
+        db.session.query(Category.name, func.count(Question.id))
+        .outerjoin(Question, Question.category_id == Category.id)
+        .group_by(Category.id)
+        .order_by(Category.name.asc())
+        .all()
+    )
+    latest_users = User.query.order_by(User.id.desc()).limit(5).all()
+    latest_questions = Question.query.order_by(Question.id.desc()).limit(5).all()
+    return render_template(
+        "admin/dashboard.html",
+        stats=stats,
+        by_cat=by_cat,
+        latest_users=latest_users,
+        latest_questions=latest_questions,
+    )
 
 # Users
 @app.route('/admin/users')
@@ -376,7 +498,6 @@ def admin_users_new():
 def admin_users_edit(uid):
     u = User.query.get_or_404(uid)
     if request.method == 'POST':
-        # email change (keep unique)
         new_email = (request.form.get('email') or '').strip().lower()
         if new_email and new_email != u.email:
             if User.query.filter(User.email == new_email, User.id != u.id).first():
@@ -387,7 +508,6 @@ def admin_users_edit(uid):
         u.name = (request.form.get('name') or '').strip()
         u.level = request.form.get('level') or None
 
-        # admin toggle with safety: never remove the last admin
         want_admin = bool(request.form.get('is_admin'))
         if not want_admin and u.is_admin:
             admin_count = User.query.filter_by(is_admin=True).count()
@@ -396,7 +516,6 @@ def admin_users_edit(uid):
                 return render_template("admin/user_form.html", user=u, categories=Category.query.all())
         u.is_admin = want_admin
 
-        # password: only change if provided
         pw = request.form.get('password') or ''
         if pw:
             u.set_password(pw)
@@ -407,24 +526,18 @@ def admin_users_edit(uid):
 
     return render_template("admin/user_form.html", user=u, categories=Category.query.all())
 
-
 @app.route('/admin/users/<int:uid>/delete', methods=['POST'])
 @admin_required
 def admin_users_delete(uid):
     u = User.query.get_or_404(uid)
-
-    # block deleting the last admin
     if u.is_admin:
         admin_count = User.query.filter_by(is_admin=True).count()
         if admin_count <= 1:
             flash("Cannot delete the last admin.", "warning")
             return redirect(url_for('admin_users'))
-
-    # block deleting yourself (optional but sensible)
     if current_user.id == u.id:
         flash("You cannot delete yourself.", "warning")
         return redirect(url_for('admin_users'))
-
     db.session.delete(u)
     db.session.commit()
     flash("User deleted", "warning")
@@ -447,6 +560,37 @@ def admin_questions():
     rows = qry.order_by(Question.id.desc()).limit(500).all()
     categories = Category.query.all()
     return render_template("admin/questions.html", rows=rows, categories=categories, q=q, cat=cat)
+
+@app.route('/admin/questions/bulk', methods=['POST'])
+@admin_required
+def admin_questions_bulk():
+    ids = [int(x) for x in request.form.getlist('ids')]
+    val = request.form.get('category_id', '').strip()
+    if not ids:
+        flash("No questions selected.", "warning")
+        return redirect(url_for('admin_questions'))
+
+    # Resolve new category
+    if val == "__clear__":
+        new_cat_id = None
+        cat_name = "(none)"
+    else:
+        if not val.isdigit():
+            flash("Pick a category to assign.", "warning")
+            return redirect(url_for('admin_questions'))
+        new_cat_id = int(val)
+        cat = Category.query.get(new_cat_id)
+        if not cat:
+            flash("Category not found.", "danger")
+            return redirect(url_for('admin_questions'))
+        cat_name = cat.name
+
+    rows = Question.query.filter(Question.id.in_(ids)).all()
+    for r in rows:
+        r.category_id = new_cat_id
+    db.session.commit()
+    flash(f"Updated {len(rows)} question(s) → {cat_name}", "success")
+    return redirect(url_for('admin_questions'))
 
 @app.route('/admin/questions/new', methods=['GET', 'POST'])
 @admin_required
@@ -495,7 +639,16 @@ def admin_questions_delete(qid):
     flash("Question deleted", "warning")
     return redirect(url_for('admin_questions'))
 
-# --- Debug helper ---
+# --- Debug helpers ---
+@app.route('/__tpl_src')
+def __tpl_src():
+    name = request.args.get('name', 'admin/questions.html')
+    try:
+        src, filename, _ = app.jinja_loader.get_source(app.jinja_env, name)
+        return {"name": name, "filename": filename, "size": len(src), "head": src[:200]}
+    except Exception as e:
+        return {"name": name, "error": repr(e)}, 500
+
 @app.route('/whoami')
 def whoami():
     return {

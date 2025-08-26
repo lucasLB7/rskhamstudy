@@ -1,14 +1,127 @@
 {% extends "base.html" %}
 {% block title %}Admin Dashboard{% endblock %}
 {% block content %}
-  <h3 class="mb-3">Admin Dashboard</h3>
-  <div class="row g-3">
-    <div class="col-md-4"><div class="card p-3 shadow-sm"><b>Users</b><div>{{ stats.users }}</div></div></div>
-    <div class="col-md-4"><div class="card p-3 shadow-sm"><b>Questions</b><div>{{ stats.questions }}</div></div></div>
-    <div class="col-md-4"><div class="card p-3 shadow-sm"><b>Categories</b><div>{{ stats.categories }}</div></div></div>
+  <!-- Greeting -->
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h3 class="mb-1">Welcome back, {{ current_user.name or current_user.email }} 👋</h3>
+      <div class="text-muted">Here’s a quick snapshot and some shortcuts to keep things tidy.</div>
+    </div>
+    <div>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('index') }}">Home</a>
+    </div>
   </div>
-  <div class="mt-3">
-    <a class="btn btn-outline-primary btn-sm" href="{{ url_for('admin_users') }}">Manage users</a>
-    <a class="btn btn-outline-primary btn-sm" href="{{ url_for('admin_questions') }}">Manage questions</a>
+
+  <!-- KPI cards -->
+  <div class="row g-3 mb-3">
+    <div class="col-md-3">
+      <div class="card p-3 shadow-sm rounded-3">
+        <div class="text-muted">Users</div>
+        <div class="display-6">{{ stats.users }}</div>
+        <a class="small" href="{{ url_for('admin_users') }}">Manage users →</a>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 shadow-sm rounded-3">
+        <div class="text-muted">Questions</div>
+        <div class="display-6">{{ stats.questions }}</div>
+        <a class="small" href="{{ url_for('admin_questions') }}">Manage questions →</a>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 shadow-sm rounded-3">
+        <div class="text-muted">Categories</div>
+        <div class="display-6">{{ stats.categories }}</div>
+        <span class="small text-muted">Keep these tidy</span>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card p-3 shadow-sm rounded-3">
+        <div class="text-muted">Unassigned</div>
+        <div class="display-6">{{ stats.unassigned }}</div>
+        <a class="small" href="{{ url_for('admin_questions') }}">Bulk assign now →</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="card p-3 shadow-sm rounded-3 mb-4">
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-primary btn-sm" href="{{ url_for('admin_questions_new') }}">+ New question</a>
+      <a class="btn btn-outline-primary btn-sm" href="{{ url_for('admin_users_new') }}">+ New user</a>
+      <a class="btn btn-outline-success btn-sm" href="{{ url_for('admin_questions') }}">Bulk assign categories</a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('start', mode='study') }}">Start Study (smoke test)</a>
+      <a class="btn btn-outline-warning btn-sm" href="{{ url_for('start', mode='exam') }}">Start Exam (smoke test)</a>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- Questions by category -->
+    <div class="col-lg-6">
+      <div class="card shadow-sm rounded-3">
+        <div class="card-header bg-white"><b>Questions by category</b></div>
+        <div class="card-body p-0">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Category</th><th class="text-end">Count</th></tr></thead>
+            <tbody>
+              {% for name, count in by_cat %}
+                <tr><td>{{ name }}</td><td class="text-end">{{ count }}</td></tr>
+              {% endfor %}
+              {% if by_cat|length == 0 %}
+                <tr><td colspan="2" class="text-center text-muted py-3">No categories yet.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent activity -->
+    <div class="col-lg-6">
+      <div class="card shadow-sm rounded-3 mb-3">
+        <div class="card-header bg-white"><b>Recently added questions</b></div>
+        <ul class="list-group list-group-flush">
+          {% for r in latest_questions %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+              <span class="text-truncate" style="max-width: 70%;">#{{ r.id }} — {{ r.text }}</span>
+              <div class="text-nowrap">
+                <span class="badge bg-light text-dark me-2">{{ r.correct_answer }}</span>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_questions_edit', qid=r.id) }}">Edit</a>
+              </div>
+            </li>
+          {% endfor %}
+          {% if latest_questions|length == 0 %}
+            <li class="list-group-item text-muted">No recent questions.</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <div class="card shadow-sm rounded-3">
+        <div class="card-header bg-white"><b>Newest users</b></div>
+        <ul class="list-group list-group-flush">
+          {% for u in latest_users %}
+            <li class="list-group-item d-flex justify-content-between">
+              <span>{{ u.name or '—' }} <span class="text-muted">({{ u.email }})</span></span>
+              {% if u.is_admin %}<span class="badge bg-success">Admin</span>{% endif %}
+            </li>
+          {% endfor %}
+          {% if latest_users|length == 0 %}
+            <li class="list-group-item text-muted">No recent users.</li>
+          {% endif %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- UX tips -->
+  <div class="alert alert-info mt-4">
+    <div class="fw-bold mb-1">Tips to keep the experience smooth:</div>
+    <ul class="mb-0">
+      <li>Use <b>Bulk assign</b> on the Questions page to categorize many items at once.</li>
+      <li>Set each user’s <b>Level</b> (Foundation / Intermediary / Full licence). Starting Study without a <code>?cat=</code> will default to their level.</li>
+      <li>Prefer <b>Study</b> for spaced practice (immediate repeats), and <b>Exam</b> for timed assessment.</li>
+      <li>After login, avoid routes that call <code>session.clear()</code> (we use a scoped clear to keep you signed in).</li>
+      <li>Keep at least one <b>Admin</b> user to prevent lockout; you can’t delete/demote the last admin.</li>
+    </ul>
   </div>
 {% endblock %}

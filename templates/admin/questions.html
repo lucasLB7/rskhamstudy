@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Admin • Questions{% endblock %}
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Questions</h3>
+    <div>
+      <a class="btn btn-primary btn-sm" href="{{ url_for('admin_questions_new') }}">+ New question</a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_home') }}">Dashboard</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mb-3" method="get">
+    <div class="col-md-6"><input class="form-control" name="q" value="{{ q }}" placeholder="Search text..."></div>
+    <div class="col-md-4">
+      <select class="form-select" name="cat">
+        <option value="">All categories</option>
+        {% for c in categories %}
+          <option value="{{ c.name }}" {% if cat==c.name %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2"><button class="btn btn-outline-primary w-100">Filter</button></div>
+  </form>
+
+  <!-- Bulk assign bar -->
+  <form method="post" action="{{ url_for('admin_questions_bulk') }}" id="bulkForm" class="card p-3 mb-3">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <input type="checkbox" id="checkall"
+               onclick="document.querySelectorAll('.qbox').forEach(cb => cb.checked = this.checked)">
+      </div>
+      <div class="col-auto">
+        <label for="checkall" class="col-form-label me-2">Select all on page</label>
+      </div>
+      <div class="col-md-4">
+        <select class="form-select" name="category_id" required>
+          <option value="" selected>Assign to…</option>
+          {% for c in categories %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+          <option value="__clear__">(Clear category)</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-success">Apply</button>
+      </div>
+    </div>
+
+    <div class="table-responsive mt-3">
+      <table class="table table-sm table-striped align-middle">
+        <thead>
+          <tr>
+            <th style="width:36px;"></th>
+            <th>ID</th><th>Category</th><th>Question</th><th>Correct</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>
+              <input class="form-check-input qbox" type="checkbox" name="ids" value="{{ r.id }}">
+            </td>
+            <td>{{ r.id }}</td>
+            <td>{{ r.category.name if r.category else '-' }}</td>
+            <td class="text-truncate" style="max-width:600px">{{ r.text }}</td>
+            <td>{{ r.correct_answer }}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_questions_edit', qid=r.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('admin_questions_delete', qid=r.id) }}" style="display:inline"
+                    onsubmit="return confirm('Delete question #{{ r.id }}?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if rows|length == 0 %}
+          <tr><td colspan="6" class="text-center text-muted">No questions found.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+
+  <script>
+    // If any checkbox is unchecked, also uncheck header toggle
+    document.addEventListener('change', function(e){
+      if (e.target.classList && e.target.classList.contains('qbox')) {
+        const all = Array.from(document.querySelectorAll('.qbox'));
+        const allChecked = all.length && all.every(cb => cb.checked);
+        const hdr = document.getElementById('checkall');
+        if (hdr) hdr.checked = allChecked;
+      }
+    });
+  </script>
+{% endblock %}

@@ -11,9 +11,18 @@
   <nav class="navbar navbar-expand-sm bg-white border-bottom">
     <div class="container">
       <a class="navbar-brand" href="{{ url_for('index') }}">HAM Study</a>
-      <div class="ms-auto">
-        <a class="btn btn-sm btn-outline-secondary me-2" href="{{ url_for('admin_home') }}">Admin</a>
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('logout') }}">Logout</a>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        {% if current_user.is_authenticated %}
+          <span class="small text-muted d-none d-md-inline">
+            Hi, {{ current_user.name or current_user.email }}
+          </span>
+          {% if current_user.is_admin %}
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_home') }}">Admin</a>
+          {% endif %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+          <a class="btn btn-sm btn-primary" href="{{ url_for('login') }}">Login</a>
+        {% endif %}
       </div>
     </div>
   </nav>
