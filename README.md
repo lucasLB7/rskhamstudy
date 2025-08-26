@@ -1,3 +1,5 @@
+## NOTICE THIS VERSION IS EXPERIENCIENG A MAX COOKIE CACHE ERROR CAUSING IT TO STOP ASKING QUESTIONS PAST 68, A FIX IS BEING ROLLED OUT SOON
+
 # RSK HAM Study
 
 RSK HAM Study is a web‑based training tool for anyone preparing for the Kenyan amateur radio (HAM) certification. It offers both **Study** and **Exam** modes so you can learn at your own pace or simulate the timed, multiple‑choice test environment.
