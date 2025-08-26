@@ -27,23 +27,21 @@
       </div>
     </div>
 
-    <!-- Default level picker -->
+    <!-- Single practice-level selector -->
     <div class="card mb-4 border-0">
       <div class="card-body p-0">
-        <div class="d-flex flex-wrap align-items-center gap-2">
-          <span class="text-muted">Default level:</span>
-          <form method="post" action="{{ url_for('update_level') }}" class="d-flex gap-2 align-items-center">
-            <select name="level" class="form-select form-select-sm" style="min-width: 240px;">
-              <option value="" {% if not level %}selected{% endif %}>(none)</option>
-              {% for c in categories %}
-                <option value="{{ c.name }}" {% if level==c.name %}selected{% endif %}>{{ c.name }}</option>
-              {% endfor %}
-            </select>
-            <button class="btn btn-sm btn-outline-primary">Save</button>
-          </form>
-        </div>
+        <label for="practice-level" class="form-label text-muted mb-1">Practice level</label>
+        <select id="practice-level" class="form-select" style="max-width: 360px;">
+          {% for c in categories %}
+            {% if c.name in allowed_names %}
+              <option value="{{ c.name }}" {% if level==c.name %}selected{% endif %}>{{ c.name }}</option>
+            {% else %}
+              <option value="{{ c.name }}" disabled class="text-muted">{{ c.name }} (locked)</option>
+            {% endif %}
+          {% endfor %}
+        </select>
         <div class="help-text mt-1">
-          If you don’t pick a category when starting, we’ll use your default level{% if level %} ({{ level }}){% endif %}.
+          We’ll use this level for Study/Exam. Higher categories are shown but locked if your account doesn’t allow them.
         </div>
       </div>
     </div>
@@ -76,46 +74,21 @@
 
     {% set no_rights = (allowed_names|length == 0) %}
 
-    <!-- Start forms with per-session override, locking higher categories -->
+    <!-- Start buttons use the single selector's value -->
     <div class="row g-3">
       <div class="col-12 col-md-6">
-        <form method="get" action="{{ url_for('start', mode='study') }}" class="card p-3 border-0 shadow-sm">
-          <label class="form-label">Category</label>
-          <div class="d-flex gap-2">
-            <select name="cat" class="form-select" {% if no_rights %}disabled{% endif %}>
-              <option value="">{{ level or '(use my level)' }}</option>
-              {% for c in categories %}
-                {% if c.name in allowed_names %}
-                  <option value="{{ c.name }}">{{ c.name }}</option>
-                {% else %}
-                  <option value="{{ c.name }}" disabled class="text-muted">{{ c.name }} (locked)</option>
-                {% endif %}
-              {% endfor %}
-            </select>
-            <button class="btn btn-success" {% if no_rights %}disabled{% endif %}>📖 Start Study</button>
-          </div>
+        <form id="form-study" method="get" action="{{ url_for('start', mode='study') }}" class="card p-3 border-0 shadow-sm">
+          <input type="hidden" name="cat" id="cat-study">
+          <button class="btn btn-success w-100" {% if no_rights %}disabled{% endif %}>📖 Start Study</button>
           {% if no_rights %}
             <div class="help-text mt-2">No permitted categories yet. Ask an administrator to assign your level.</div>
           {% endif %}
         </form>
       </div>
-
       <div class="col-12 col-md-6">
-        <form method="get" action="{{ url_for('start', mode='exam') }}" class="card p-3 border-0 shadow-sm">
-          <label class="form-label">Category</label>
-          <div class="d-flex gap-2">
-            <select name="cat" class="form-select" {% if no_rights %}disabled{% endif %}>
-              <option value="">{{ level or '(use my level)' }}</option>
-              {% for c in categories %}
-                {% if c.name in allowed_names %}
-                  <option value="{{ c.name }}">{{ c.name }}</option>
-                {% else %}
-                  <option value="{{ c.name }}" disabled class="text-muted">{{ c.name }} (locked)</option>
-                {% endif %}
-              {% endfor %}
-            </select>
-            <button class="btn btn-warning" {% if no_rights %}disabled{% endif %}>📝 Start Exam</button>
-          </div>
+        <form id="form-exam" method="get" action="{{ url_for('start', mode='exam') }}" class="card p-3 border-0 shadow-sm">
+          <input type="hidden" name="cat" id="cat-exam">
+          <button class="btn btn-warning w-100" {% if no_rights %}disabled{% endif %}>📝 Start Exam</button>
         </form>
       </div>
     </div>
@@ -126,4 +99,21 @@
   </div>
 </div>
 
+<script>
+  (function () {
+    var sel = document.getElementById('practice-level');
+    var cs  = document.getElementById('cat-study');
+    var ce  = document.getElementById('cat-exam');
+    function sync() {
+      if (sel && sel.value) {
+        cs.value = sel.value;
+        ce.value = sel.value;
+      }
+    }
+    sync();
+    sel && sel.addEventListener('change', sync);
+  })();
+</script>
+
 {% endblock %}
+s

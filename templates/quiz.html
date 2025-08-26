@@ -1,74 +1,133 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Quiz</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
-  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
-</head>
-<body class="bg-light">
-  <div class="container mt-4">
-    <div class="card shadow-lg p-4 rounded-4">
-      <!-- Top bar: Home (left) • End session (right, subtle) -->
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-secondary">
-          🏠 Home
-        </a>
-        <small class="text-muted">
-          <a href="{{ url_for('summary') }}" class="btn btn-outline-danger btn-sm">End session</a>
-        </small>
-      </div>
+{% extends "base.html" %}
+{% block title %}Quiz{% endblock %}
+{% block content %}
 
-      <!-- Title row -->
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div>
-          {% if session.get('mode') == 'study' %}
-            <h1 class="h4 text-success mb-0">🎯 Study Mode</h1>
-          {% else %}
-            <h1 class="h4 text-warning mb-0">📝 Exam Mode</h1>
-          {% endif %}
-        </div>
-        <div class="text-muted">Question {{ number }} of {{ total }}</div>
-      </div>
+<style>
+  .quiz-wrap { max-width: 900px; margin: 0 auto; }
+  .chip { font-size:.8rem; padding:.25rem .5rem; border-radius:999px; }
+  .chip.study { background:#e8f5e9; color:#1b5e20; }
+  .chip.exam  { background:#fff8e1; color:#795300; }
+  .q-card { border:0; border-radius: 1rem; box-shadow: 0 16px 40px rgba(0,0,0,.06); }
+  .choice-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap: .75rem; }
+  .choice { position:relative; }
+  .choice input { position:absolute; opacity:0; inset:0; cursor:pointer; }
+  .choice label {
+    display:flex; gap:.75rem; align-items:flex-start;
+    border:1px solid #e7e7ea; border-radius:.75rem; padding:.9rem 1rem;
+    background:#fff; cursor:pointer; transition: all .15s ease;
+    min-height: 64px;
+  }
+  .choice:hover label { border-color:#bfc4d1; box-shadow:0 8px 24px rgba(0,0,0,.04); }
+  .dot {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px; border-radius:50%; border:1px solid #c9ceda; font-weight:600; font-size:.9rem;
+    background:#f8f9fc;
+  }
+  .choice input:checked + label {
+    border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.15);
+  }
+  .choice input:checked + label .dot {
+    background:#0d6efd; color:#fff; border-color:#0d6efd;
+  }
+  .progress { height:.6rem; background:#eef1f6; }
+  .progress-bar { background:#0d6efd; }
+  .footer-actions { display:flex; gap:.5rem; justify-content:center; }
+</style>
 
-      {% if repeat %}
-      <div class="alert alert-warning mt-2">
-        Note: You missed this question earlier.
+<div class="quiz-wrap">
+  <div class="card q-card p-4 p-md-5">
+    <!-- Top row -->
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div class="d-flex align-items-center gap-2">
+        {% if session.get('mode') == 'study' %}
+          <span class="chip study">🎯 Study Mode</span>
+        {% else %}
+          <span class="chip exam">📝 Exam Mode</span>
+        {% endif %}
+        <span class="text-muted">Question {{ number }} of {{ total }}</span>
       </div>
-      {% endif %}
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('index') }}">Home</a>
+        <a class="btn btn-sm btn-outline-danger" href="{{ url_for('summary') }}">End session</a>
+      </div>
+    </div>
 
-      <h4 class="mt-3 mb-3">{{ q.question }}</h4>
-      <form method="POST">
-        <!-- IMPORTANT: name="answer" must match main.py (request.form.get('answer')) -->
+    {% set pct = (number/total*100)|round(0,'floor') %}
+    <div class="progress mb-4">
+      <div class="progress-bar" role="progressbar" style="width: {{ pct }}%;" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+
+    {% if repeat %}
+      <div class="alert alert-warning d-flex align-items-center gap-2" role="alert">
+        <span>⚠️</span> <div>Note: You missed this question earlier.</div>
+      </div>
+    {% endif %}
+
+    <!-- Question -->
+    <h2 class="h4 mb-3">{{ q.question }}</h2>
+
+    <!-- Options -->
+    <form id="quiz-form" method="POST">
+      <div class="choice-grid">
         {% for letter, text in options %}
-        <label>
-            <input type="radio" name="answer" value="{{ letter }}" required>
-            {{ text }}
-        </label><br>
+          <div class="choice">
+            <input id="opt-{{ letter }}" type="radio" name="answer" value="{{ letter }}" required>
+            <label for="opt-{{ letter }}">
+              <span class="dot">{{ letter }}</span>
+              <span>{{ text }}</span>
+            </label>
+          </div>
         {% endfor %}
+      </div>
 
-        <!-- Centered submit -->
-        <div class="mt-4 text-center">
-          <button class="btn btn-primary btn-lg px-5" type="submit">Submit</button>
-        </div>
-      </form>
+      <div class="mt-4 footer-actions">
+        <button id="submitBtn" class="btn btn-primary btn-lg px-5" type="submit" disabled>Submit</button>
+      </div>
+    </form>
 
-      <!-- Optional feedback badge (if you want to surface last result) -->
-      {% if feedback %}
-        {% set status, info = feedback %}
-        <div class="text-center mt-3">
-          {% if status == 'correct' %}
-            <span class="badge bg-success">Correct</span>
-          {% else %}
-            <span class="badge bg-danger">Wrong</span>
-            <small class="text-muted ms-2">Correct answer: <strong>{{ info }}</strong></small>
-          {% endif %}
-        </div>
-      {% endif %}
+    <!-- Feedback -->
+    {% if feedback %}
+      {% set status, info = feedback %}
+      <div class="text-center mt-3">
+        {% if status == 'correct' %}
+          <span class="badge bg-success px-3 py-2">✅ Correct</span>
+        {% else %}
+          <span class="badge bg-danger px-3 py-2">❌ Wrong</span>
+          <small class="text-muted ms-2">Correct answer: <strong>{{ info }}</strong></small>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="text-center text-muted small mt-4">
+      Tip: use keys <kbd>1</kbd>–<kbd>4</kbd> to select an option, then <kbd>Enter</kbd> to submit.
     </div>
   </div>
+</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+<script>
+  (function () {
+    const form = document.getElementById('quiz-form');
+    const submitBtn = document.getElementById('submitBtn');
+    const radios = Array.from(document.querySelectorAll('input[name="answer"]'));
+    const letters = ['A','B','C','D'];
+
+    function updateButton() {
+      submitBtn.disabled = !radios.some(r => r.checked);
+    }
+    radios.forEach(r => r.addEventListener('change', updateButton));
+    updateButton();
+
+    document.addEventListener('keydown', function (e) {
+      const map = {'1':0,'2':1,'3':2,'4':3};
+      if (map.hasOwnProperty(e.key)) {
+        const r = document.querySelector('input[name="answer"][value="'+letters[map[e.key]]+'"]');
+        if (r) { r.click(); }
+      }
+      if (e.key === 'Enter' && !submitBtn.disabled) {
+        form.submit();
+      }
+    });
+  })();
+</script>
+
+{% endblock %}

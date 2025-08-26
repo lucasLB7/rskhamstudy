@@ -236,18 +236,24 @@ def update_level():
 @login_required
 def start(mode):
     """
-    Enforce level permissions. ?cat= is used only if within user's allowed set.
-    Otherwise we fall back to the user's own level (if permitted), else show a message.
+    Enforce level permissions. If ?cat= is provided and permitted, use it and
+    also save it as the user's default level. Otherwise we fall back to the
+    user's own level (if permitted), else show a message.
     """
     req_cat = request.args.get("cat") or None
     user_level = normalize_level(getattr(current_user, "level", None))
     allowed = allowed_category_names(user_level)
 
-    # Choose category: requested if allowed, else user's level if allowed, else none
+    # Decide category to run with
     cat_name = None
     if req_cat:
+        # If user picked something via the UI, only allow if permitted
         if req_cat in allowed:
             cat_name = req_cat
+            # Persist as default for next time
+            if current_user.level != req_cat:
+                current_user.level = req_cat
+                db.session.commit()
         else:
             if user_level in allowed:
                 cat_name = user_level
@@ -279,23 +285,23 @@ def start(mode):
     total_available = base.count()
     cap = min(60, total_available) if mode == "exam" else total_available
 
-    # scoped clear: DO NOT session.clear() (keeps you logged in)
     _clear_quiz_session()
-
-    session['mode'] = mode
-    session['cat_id'] = cat_id
-    session['seed'] = random.randrange(2**31)
-    session['cursor'] = 0
-    session['total_in_session'] = cap
-    session['correct'] = 0
-    session['wrong'] = 0
-    session['wrong_ids'] = []
-    session['last_choice'] = {}
-    session['last_feedback'] = None
-    session['study_queue'] = []      # immediate repeat feature uses this queue
-    session['review_only'] = False
-
+    session.update({
+        'mode': mode,
+        'cat_id': cat_id,
+        'seed': random.randrange(2**31),
+        'cursor': 0,
+        'total_in_session': cap,
+        'correct': 0,
+        'wrong': 0,
+        'wrong_ids': [],
+        'last_choice': {},
+        'last_feedback': None,
+        'study_queue': [],
+        'review_only': False,
+    })
     return redirect(url_for('quiz'))
+
 
 @app.route('/quiz', methods=['GET', 'POST'])
 @login_required

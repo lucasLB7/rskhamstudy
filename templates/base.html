@@ -11,17 +11,27 @@
   <nav class="navbar navbar-expand-sm bg-white border-bottom">
     <div class="container">
       <a class="navbar-brand" href="{{ url_for('index') }}">HAM Study</a>
+
       <div class="ms-auto d-flex align-items-center gap-2">
         {% if current_user.is_authenticated %}
-          <span class="small text-muted d-none d-md-inline">
+          <span class="text-muted small d-none d-md-inline">
             Hi, {{ current_user.name or current_user.email }}
           </span>
+
+          {% set on_index = (request.endpoint == 'index') %}
+          <button type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  {% if on_index %}disabled title="You're on the home page"{% endif %}
+                  onclick="if (history.length > 1) { history.back(); } else { window.location.href='{{ url_for('index') }}'; }">
+            Back
+          </button>
+
           {% if current_user.is_admin %}
             <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_home') }}">Admin</a>
           {% endif %}
           <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('logout') }}">Logout</a>
         {% else %}
-          <a class="btn btn-sm btn-primary" href="{{ url_for('login') }}">Login</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('login') }}">Login</a>
         {% endif %}
       </div>
     </div>

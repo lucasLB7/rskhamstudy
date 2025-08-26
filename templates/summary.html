@@ -1,53 +1,146 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Summary</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
-</head>
-<body class="bg-light">
+{% extends "base.html" %}
+{% block title %}Summary{% endblock %}
+{% block content %}
 
-<div class="container mt-4">
-    <!-- Top bar: Home (left) -->
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-secondary">🏠 Home</a>
-        <span></span>
-    </div>
+<style>
+  .summary-wrap { max-width: 1000px; margin: 0 auto; }
+  .chip { font-size:.8rem; padding:.25rem .5rem; border-radius:999px; }
+  .chip.study { background:#e8f5e9; color:#1b5e20; }
+  .chip.exam  { background:#fff8e1; color:#795300; }
+  .stat-card { border:0; border-radius:.85rem; box-shadow:0 12px 30px rgba(0,0,0,.06); }
+  .progress { height:.75rem; background:#eef1f6; }
+  .progress-bar { background:#0d6efd; }
+  .list-legend span { display:inline-flex; align-items:center; gap:.35rem; margin-right:1rem; }
+  .pill { padding:.1rem .45rem; border-radius:.45rem; font-size:.8rem; }
+</style>
 
-    <div class="card shadow-lg p-5 rounded-4 text-center">
-        <h1 class="mb-4">✅ Quiz Finished!</h1>
-        <h3>Your score: {{ score }} / {{ total }}</h3>
-        <p class="text-success fw-bold">✅ Correct: {{ correct }}</p>
-        <p class="text-danger fw-bold">❌ Wrong: {{ wrong }}</p>
-        <div class="d-flex justify-content-center gap-3">
-          <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg mt-3">🔄 Try Again</a>
-          <a href="{{ url_for('redo_wrongs') }}" class="btn btn-success btn-lg mt-3">🎯 Study Wrong Ones</a>
+<div class="summary-wrap">
+  <div class="card stat-card p-4 p-md-5 mb-4">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h1 class="h4 mb-1">✅ Session complete</h1>
+        <div class="d-flex align-items-center gap-2 text-muted">
+          {% if mode == 'study' %}
+            <span class="chip study">🎯 Study Mode</span>
+          {% else %}
+            <span class="chip exam">📝 Exam Mode</span>
+          {% endif %}
+          <span>Questions {{ total }}</span>
         </div>
+      </div>
+      <div class="text-end">
+        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">Home</a>
+      </div>
     </div>
 
-    {% if wrong_questions %}
-    <div class="card shadow-lg p-4 rounded-4 mt-5">
-        <h2 class="mb-4 text-center text-danger">Review of Wrong Answers</h2>
-        {% for wq in wrong_questions.values() %}
-        <div class="mb-3 p-3 border rounded">
-            <p class="fw-bold">❓ Question: {{ wq.question }}</p>
-            <p>Your answer: <span class="text-danger">{{ wq.your_answer }}</span></p>
-            <p>Correct answer: <span class="text-success">{{ wq.correct_answer }}</span></p>
-            <ul class="list-group">
-                {% for option in wq.options %}
-                <li class="list-group-item {% if option == wq.correct_answer %}list-group-item-success{% elif option == wq.your_answer %}list-group-item-danger{% endif %}">
-                    {{ option }}
-                </li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endfor %}
+    {% set pct = (0 if total == 0 else (score/total*100))|round(0, 'floor') %}
+    <div class="mt-3">
+      <div class="progress mb-2">
+        <div class="progress-bar" role="progressbar" style="width: {{ pct }}%;" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div class="d-flex justify-content-between text-muted small">
+        <span>{{ pct }}%</span>
+        <span>{{ score }} / {{ total }}</span>
+      </div>
     </div>
+
+    <div class="row g-3 mt-3">
+      <div class="col-12 col-md-4">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Correct</div>
+          <div class="fs-4 text-success fw-semibold">+{{ correct }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Wrong</div>
+          <div class="fs-4 text-danger fw-semibold">-{{ wrong }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <div class="border rounded-3 p-3 h-100">
+          <div class="text-muted small">Result</div>
+          <div class="fs-4 fw-semibold">{{ score }} / {{ total }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mt-4">
+      <a class="btn btn-success" href="{{ url_for('redo_wrongs') }}" {% if not wrong_questions %}disabled{% endif %}>🎯 Study wrong ones</a>
+      <a class="btn btn-primary" href="{{ url_for('start', mode='study') }}">📖 Start Study again</a>
+      <a class="btn btn-warning" href="{{ url_for('start', mode='exam') }}">📝 Start Exam again</a>
+    </div>
+
+    {% if not wrong_questions %}
+      <div class="alert alert-success mt-3 mb-0">
+        🎉 Perfect—no wrong answers to review!
+      </div>
     {% endif %}
+  </div>
+
+  {% if wrong_questions %}
+  <div class="card stat-card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h2 class="h5 mb-0 text-danger">Review your mistakes ({{ wrong_questions|length }})</h2>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" id="expandAll">Expand all</button>
+        <button class="btn btn-sm btn-outline-secondary" id="collapseAll">Collapse all</button>
+      </div>
+    </div>
+    <div class="list-legend text-muted small mb-2">
+      <span><span class="pill bg-success text-white">Correct</span> correct answer</span>
+      <span><span class="pill bg-danger text-white">Your</span> your answer</span>
+    </div>
+
+    <div class="accordion" id="wrongAcc">
+      {% for key, wq in wrong_questions.items() %}
+        {% set idx = loop.index %}
+        <div class="accordion-item">
+          <h2 class="accordion-header" id="h{{ idx }}">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ idx }}" aria-expanded="false" aria-controls="c{{ idx }}">
+              <span class="me-2">❓</span>
+              <span class="fw-semibold">{{ wq.question }}</span>
+            </button>
+          </h2>
+          <div id="c{{ idx }}" class="accordion-collapse collapse" aria-labelledby="h{{ idx }}" data-bs-parent="#wrongAcc">
+            <div class="accordion-body">
+              <div class="mb-2">
+                <div>Your answer:
+                  <span class="badge bg-danger">{{ wq.your_answer or '—' }}</span>
+                </div>
+                <div>Correct answer:
+                  <span class="badge bg-success">{{ wq.correct_answer }}</span>
+                </div>
+              </div>
+              <ul class="list-group">
+                {% for option in wq.options %}
+                  <li class="list-group-item d-flex align-items-center
+                      {% if option == wq.correct_answer %} list-group-item-success{% elif option == wq.your_answer %} list-group-item-danger{% endif %}">
+                    {{ option }}
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+<script>
+  (function () {
+    const acc = document.getElementById('wrongAcc');
+    if (!acc) return;
+    const items = acc.querySelectorAll('.accordion-collapse');
+    document.getElementById('expandAll')?.addEventListener('click', () => {
+      items.forEach(el => new bootstrap.Collapse(el, { show: true, toggle: false }).show());
+    });
+    document.getElementById('collapseAll')?.addEventListener('click', () => {
+      items.forEach(el => new bootstrap.Collapse(el, { toggle: false }).hide());
+    });
+  })();
+</script>
+
+{% endblock %}
