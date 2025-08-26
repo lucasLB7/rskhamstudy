@@ -41,11 +41,11 @@
       <h4 class="mt-3 mb-3">{{ q.question }}</h4>
       <form method="POST">
         <!-- IMPORTANT: name="answer" must match main.py (request.form.get('answer')) -->
-        {% for option in options %}
-        <div class="form-check my-2">
-          <input class="form-check-input" type="radio" name="answer" id="opt{{ loop.index }}" value="{{ option }}" required>
-          <label class="form-check-label" for="opt{{ loop.index }}">{{ option }}</label>
-        </div>
+        {% for letter, text in options %}
+        <label>
+            <input type="radio" name="answer" value="{{ letter }}" required>
+            {{ text }}
+        </label><br>
         {% endfor %}
 
         <!-- Centered submit -->
