@@ -1,3 +1,8 @@
 runtime: python311
-
 entrypoint: gunicorn -b :$PORT main:app
+
+env_variables:
+  DATABASE_URL: 'postgresql+psycopg2://appuser:Sha512BreedSploit!*@/rsk_ham_db?host=/cloudsql/rsk-ham-study:europe-west1:primary-pg'
+  SECRET_KEY: 'c8f7a40cf54b9d9be9d7f0d0d68b24a04dcd1f49d43cb1d5c46ef292f5c6e2a9'
+  ADMIN_PASSWORD: 'Sha512BreedSploit!*'
+  UPLOAD_BUCKET: 'rsk-ham-study.appspot.com'  

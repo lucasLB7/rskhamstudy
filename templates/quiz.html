@@ -22,6 +22,7 @@
     display:inline-flex; align-items:center; justify-content:center;
     width:28px; height:28px; border-radius:50%; border:1px solid #c9ceda; font-weight:600; font-size:.9rem;
     background:#f8f9fc;
+    /* letters hidden; numbers shown (we render 1–4) */
   }
   .choice input:checked + label {
     border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.15);
@@ -32,6 +33,18 @@
   .progress { height:.6rem; background:#eef1f6; }
   .progress-bar { background:#0d6efd; }
   .footer-actions { display:flex; gap:.5rem; justify-content:center; }
+
+  /* Image styling for stem and options */
+  .q-stem img,
+  .choice label img {
+    display:block;
+    max-height: 220px;
+    width: 100%;
+    object-fit: contain;
+    border-radius:.5rem;
+    border:1px solid #e7e7ea;
+    background:#fff;
+  }
 </style>
 
 <div class="quiz-wrap">
@@ -52,7 +65,7 @@
       </div>
     </div>
 
-    {% set pct = (number/total*100)|round(0,'floor') %}
+    {% set pct = (number/total*100)|round(0,'floor') if total else 0 %}
     <div class="progress mb-4">
       <div class="progress-bar" role="progressbar" style="width: {{ pct }}%;" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100"></div>
     </div>
@@ -63,18 +76,40 @@
       </div>
     {% endif %}
 
-    <!-- Question -->
-    <h2 class="h4 mb-3">{{ q.question }}</h2>
+    {# ---------- Question (supports text and/or image) ---------- #}
+    {% set stem_img = q_stem_img or (q.question_image_url if q is defined else None) %}
+    {% set stem_text = q_stem_text or (q.text if q is defined else None) or (q.question if q is defined else None) %}
+
+    <div class="q-stem mb-3">
+      {% if stem_img %}
+        <img src="{{ stem_img }}" alt="Question image" loading="lazy" class="mb-3">
+      {% endif %}
+      {% if stem_text %}
+        <h2 class="h5 mb-0">{{ stem_text }}</h2>
+      {% endif %}
+    </div>
 
     <!-- Options -->
-    <form id="quiz-form" method="POST">
+    <form id="quiz-form" method="POST" novalidate>
       <div class="choice-grid">
-        {% for letter, text in options %}
+        {# options are tuples: (letter, text, image_url?) but user shouldn't see the letter #}
+        {% for item in options %}
+          {% set letter = item[0] %}
+          {% set text = item[1] if item|length > 1 else '' %}
+          {% set img  = item[2] if item|length > 2 else None %}
           <div class="choice">
-            <input id="opt-{{ letter }}" type="radio" name="answer" value="{{ letter }}" required>
-            <label for="opt-{{ letter }}">
-              <span class="dot">{{ letter }}</span>
-              <span>{{ text }}</span>
+            <input id="opt-{{ loop.index }}" type="radio" name="answer" value="{{ letter }}" required>
+            <label for="opt-{{ loop.index }}">
+              {# show 1–4 badge instead of A–D #}
+              <span class="dot">{{ loop.index }}</span>
+              <span class="d-flex flex-column gap-2 w-100">
+                {% if img %}
+                  <img src="{{ img }}" alt="Option image" loading="lazy">
+                {% endif %}
+                {% if text %}
+                  <span>{{ text }}</span>
+                {% endif %}
+              </span>
             </label>
           </div>
         {% endfor %}
@@ -109,7 +144,6 @@
     const form = document.getElementById('quiz-form');
     const submitBtn = document.getElementById('submitBtn');
     const radios = Array.from(document.querySelectorAll('input[name="answer"]'));
-    const letters = ['A','B','C','D'];
 
     function updateButton() {
       submitBtn.disabled = !radios.some(r => r.checked);
@@ -117,12 +151,11 @@
     radios.forEach(r => r.addEventListener('change', updateButton));
     updateButton();
 
+    // Map keys 1–4 to the first/second/third/fourth visible option (NOT A–D)
     document.addEventListener('keydown', function (e) {
-      const map = {'1':0,'2':1,'3':2,'4':3};
-      if (map.hasOwnProperty(e.key)) {
-        const r = document.querySelector('input[name="answer"][value="'+letters[map[e.key]]+'"]');
-        if (r) { r.click(); }
-      }
+      if (!/^[1-4]$/.test(e.key)) return;
+      const idx = parseInt(e.key, 10) - 1;
+      if (radios[idx]) { radios[idx].click(); }
       if (e.key === 'Enter' && !submitBtn.disabled) {
         form.submit();
       }

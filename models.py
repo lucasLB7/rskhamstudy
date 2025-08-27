@@ -25,11 +25,22 @@ class Category(db.Model):
 
 class Question(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    # allow image-only stems
     text = db.Column(db.Text, nullable=False)
+
     choice_a = db.Column(db.Text, nullable=False)
     choice_b = db.Column(db.Text, nullable=False)
     choice_c = db.Column(db.Text, nullable=False)
     choice_d = db.Column(db.Text, nullable=False)
+
     correct_answer = db.Column(db.String(1), nullable=False)  # 'A'/'B'/'C'/'D'
+
     category_id = db.Column(db.Integer, db.ForeignKey('category.id'))
     category = db.relationship('Category', lazy='joined')
+
+    # NEW image URL fields
+    question_image_url = db.Column(db.Text)
+    choice_a_image_url = db.Column(db.Text)
+    choice_b_image_url = db.Column(db.Text)
+    choice_c_image_url = db.Column(db.Text)
+    choice_d_image_url = db.Column(db.Text)

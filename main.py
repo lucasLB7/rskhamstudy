@@ -1,5 +1,4 @@
-# Dependancies and critical libraries (see requirements.txt)
-
+# Dependencies and critical libraries (see requirements.txt)
 from flask import Flask, render_template, request, redirect, url_for, session, abort, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from pathlib import Path
@@ -8,30 +7,49 @@ from models import db, User, Category, Question
 from sqlalchemy import func
 from functools import wraps
 from datetime import datetime, timezone
+from flask_migrate import Migrate
+from werkzeug.datastructures import FileStorage
+try:
+    from storage import upload_image  # your GCS helper
+except Exception:
+    upload_image = None  # fallback if running locally without GCS
+from werkzeug.utils import secure_filename
 
+# --- App + config ---
 app = Flask(__name__, instance_relative_config=True)
-app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "supersecretkey")
 
-# ensure instance/ exists
-Path(app.instance_path).mkdir(parents=True, exist_ok=True)
+# Limit uploads (adjust if needed)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB
 
-# keep JSON sorting behaviour
-app.config['JSON_SORT_KEYS'] = False
+# JSON sort behavior
+app.config["JSON_SORT_KEYS"] = False
 try:
     app.json.sort_keys = False
 except Exception:
     pass
 
-# (optional) make template edits auto-refresh
+# Auto-reload templates in dev
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
-# SQLite: instance/rskhamstudy.db
-db_path = Path(app.instance_path) / "rskhamstudy.db"
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path.as_posix()}"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# --- Database config (GAE-friendly, Cloud SQL-ready) ---
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL:
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+else:
+    # Otherwise, default to SQLite.
+    on_gae = os.environ.get("GAE_ENV", "").startswith("standard")
+    on_cloud_run = bool(os.environ.get("K_SERVICE"))
+    data_dir = Path("/tmp") if (on_gae or on_cloud_run) else Path(app.instance_path)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "rskhamstudy.db"
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path.as_posix()}"
 
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 300}
+
+# Initialize DB + migrations
 db.init_app(app)
-from flask_migrate import Migrate
 migrate = Migrate(app, db)
 
 # --- Auth setup ---
@@ -45,30 +63,53 @@ def load_user(user_id: str):
     except Exception:
         return None
 
-# Create tables + seed categories + seed admin once
-with app.app_context():
-    db.create_all()
+# ---------- Seeding ----------
+def seed_defaults():
+    """Idempotent seeds for categories and the first admin."""
     if not Category.query.first():
         for name in ["Foundation", "Intermediary", "Full licence", "Unassigned"]:
             db.session.add(Category(name=name))
         db.session.commit()
+
     if not User.query.filter_by(is_admin=True).first():
         admin = User(email="admin@local", name="Admin", is_admin=True, level=None)
         admin.set_password(os.environ.get("ADMIN_PASSWORD", "changeme"))
         db.session.add(admin)
         db.session.commit()
-        print("Seeded admin: admin@local / changeme (change ASAP)")
+        app.logger.info("Seeded admin user: admin@local (password from ADMIN_PASSWORD).")
+
+# Ensure tables + seed exactly once per worker
+_init_ran = False
+def _ensure_db_seeded_once():
+    global _init_ran
+    if _init_ran:
+        return
+    with app.app_context():
+        try:
+            db.create_all()
+            seed_defaults()
+        except Exception as e:
+            app.logger.warning(f"DB init/seed skipped or failed: {e}")
+    _init_ran = True
+_ensure_db_seeded_once()
 
 # ---------- Quiz helpers ----------
 def _question_to_dict(q: Question):
     texts = [q.choice_a, q.choice_b, q.choice_c, q.choice_d]
+    imgs  = [
+        getattr(q, "choice_a_image_url", None),
+        getattr(q, "choice_b_image_url", None),
+        getattr(q, "choice_c_image_url", None),
+        getattr(q, "choice_d_image_url", None),
+    ]
     letters = ["A", "B", "C", "D"]
-    pairs = list(zip(letters, texts))
+    pairs = [(L, t, imgs[i]) for i, (L, t) in enumerate(zip(letters, texts))]
     correct_letter = q.correct_answer
     correct_text = {"A": q.choice_a, "B": q.choice_b, "C": q.choice_c, "D": q.choice_d}[correct_letter]
     return {
         "id": q.id,
         "question": q.text,
+        "question_image_url": getattr(q, "question_image_url", None),
         "pairs": pairs,
         "correct_letter": correct_letter,
         "correct_text": correct_text,
@@ -94,7 +135,6 @@ def _clear_quiz_session():
 
 # ---------- Level helpers (permissions & synonyms) ----------
 LEVEL_SYNONYMS = {
-    # Friendly labels → stored category names
     "Novice": "Foundation",
     "Foundation": "Foundation",
     "Intermediary": "Intermediary",
@@ -137,10 +177,59 @@ def admin_required(fn):
     def wrapper(*args, **kwargs):
         if not current_user.is_authenticated:
             return redirect(url_for('login', next=request.path))
-        if not current_user.is_admin:
+        if not getattr(current_user, "is_admin", False):
             abort(403)
         return fn(*args, **kwargs)
     return wrapper
+
+# ---------- Upload helpers (centralized & safe) ----------
+def _running_on_app_engine() -> bool:
+    # True on GAE standard; also consider Cloud Run env var
+    return bool(os.getenv("GAE_ENV") == "standard" or os.getenv("K_SERVICE"))
+
+def _save_local(fs, folder: str) -> str | None:
+    """Fallback when storage.upload_image is not available: save under /static/uploads/<folder>/."""
+    if not fs or not getattr(fs, "filename", ""):
+        return None
+    uploads_root = Path(app.static_folder) / "uploads" / folder
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    fname = secure_filename(fs.filename)
+    # Optional: uniquify
+    stem = Path(fname).stem
+    suffix = Path(fname).suffix
+    i = 1
+    out = uploads_root / fname
+    while out.exists():
+        fname = f"{stem}_{i}{suffix}"
+        out = uploads_root / fname
+        i += 1
+    fs.save(out.as_posix())
+    # Return a URL the browser can load
+    return url_for("static", filename=f"uploads/{folder}/{fname}")
+
+def _upload_file(fs: FileStorage | None, folder: str) -> str | None:
+    """
+    Upload to GCS in prod; locally fall back to /static/uploads.
+    Returns:
+      - URL string on success
+      - None if no file provided
+      - "__UPLOAD_FAILED__" sentinel if an exception occurred (and flashes a message)
+    """
+    if not fs or not getattr(fs, "filename", ""):
+        return None
+    try:
+        if _running_on_app_engine():
+            app.logger.info("Upload path: GCS")
+            if not upload_image:
+                raise RuntimeError("upload_image helper not available in prod.")
+            return upload_image(fs, folder=folder)
+        else:
+            app.logger.info("Upload path: LOCAL")
+            return _save_local(fs, folder)
+    except Exception as e:
+        app.logger.exception(f"Image upload failed for folder={folder}")
+        flash(f"Image upload failed: {e}", "danger")
+        return "__UPLOAD_FAILED__"
 
 # ---------- Routes ----------
 
@@ -176,8 +265,6 @@ def login():
         flash("Welcome back!", "success")
 
         # --- Last login handling ---
-        # If your User model later has a DateTime column `last_login_at`,
-        # we'll use it. Otherwise, we fall back to session-only storage.
         fmt = "%b %d, %Y %H:%M"
         prev_display = None
         try:
@@ -215,13 +302,11 @@ def logout():
 @app.route('/me/level', methods=['POST'])
 @login_required
 def update_level():
-    # Accept friendly labels (e.g., "Novice") and map to stored category names.
     raw_level = (request.form.get('level') or '').strip()
     normalized = normalize_level(raw_level)
     if not raw_level:
         normalized = None
 
-    # Validate against existing categories (or allow None to clear)
     if normalized and not Category.query.filter_by(name=normalized).first():
         flash("Invalid level.", "danger")
         return redirect(url_for('index'))
@@ -235,11 +320,6 @@ def update_level():
 @app.route('/start/<mode>')
 @login_required
 def start(mode):
-    """
-    Enforce level permissions. If ?cat= is provided and permitted, use it and
-    also save it as the user's default level. Otherwise we fall back to the
-    user's own level (if permitted), else show a message.
-    """
     req_cat = request.args.get("cat") or None
     user_level = normalize_level(getattr(current_user, "level", None))
     allowed = allowed_category_names(user_level)
@@ -247,10 +327,8 @@ def start(mode):
     # Decide category to run with
     cat_name = None
     if req_cat:
-        # If user picked something via the UI, only allow if permitted
         if req_cat in allowed:
             cat_name = req_cat
-            # Persist as default for next time
             if current_user.level != req_cat:
                 current_user.level = req_cat
                 db.session.commit()
@@ -264,7 +342,6 @@ def start(mode):
         if user_level in allowed:
             cat_name = user_level
         elif allowed:
-            # Edge-case: user has allowed categories but no level string set
             cat_name = sorted(allowed)[0]
         else:
             flash("No permitted categories for your account. Ask an admin to assign a level.", "danger")
@@ -301,7 +378,6 @@ def start(mode):
         'review_only': False,
     })
     return redirect(url_for('quiz'))
-
 
 @app.route('/quiz', methods=['GET', 'POST'])
 @login_required
@@ -352,7 +428,7 @@ def quiz():
             # immediate repeat feature:
             if serving_from_queue:
                 failed = study_queue.pop(0)
-                study_queue.insert(0, failed)  # keep at front (repeat immediately again)
+                study_queue.insert(0, failed)
             else:
                 if current_id not in study_queue:
                     study_queue.insert(0, current_id)
@@ -362,7 +438,7 @@ def quiz():
         return redirect(url_for('quiz'))
 
     # GET render
-    options = qd["pairs"][:]
+    options = qd["pairs"][:]      # keep (letter, text, image_url)
     random.shuffle(options)
 
     feedback = session.get('last_feedback')
@@ -370,12 +446,13 @@ def quiz():
 
     total = cap
     number = min(cursor + 1, total)
-
     repeat = current_id in set(session.get('wrong_ids', []))
 
     return render_template(
         "quiz.html",
         q={"question": qd["question"], "id": qd["id"]},
+        q_stem_text=qd["question"],
+        q_stem_img=qd.get("question_image_url"),
         options=options,
         number=number,
         total=total,
@@ -408,7 +485,14 @@ def summary():
             your_letter = last_choice.get(str(qid))
             wrong_questions[str(qid)] = {
                 'question': r.text,
+                'question_image_url': getattr(r, 'question_image_url', None),
                 'options': opts,
+                'option_images': [
+                    getattr(r, 'choice_a_image_url', None),
+                    getattr(r, 'choice_b_image_url', None),
+                    getattr(r, 'choice_c_image_url', None),
+                    getattr(r, 'choice_d_image_url', None),
+                ],
                 'correct_answer': {"A": opts[0], "B": opts[1], "C": opts[2], "D": opts[3]}[correct_letter],
                 'your_answer': {"A": opts[0], "B": opts[1], "C": opts[2], "D": opts[3]}.get(your_letter)
             }
@@ -451,7 +535,6 @@ def admin_home():
         "categories": Category.query.count(),
         "unassigned": Question.query.filter_by(category_id=None).count(),
     }
-    # Questions per category (includes 0-count categories)
     by_cat = (
         db.session.query(Category.name, func.count(Question.id))
         .outerjoin(Question, Question.category_id == Category.id)
@@ -603,19 +686,62 @@ def admin_questions_bulk():
 def admin_questions_new():
     categories = Category.query.all()
     if request.method == 'POST':
-        text = request.form.get('text') or ''
-        a = request.form.get('choice_a') or ''
-        b = request.form.get('choice_b') or ''
-        c = request.form.get('choice_c') or ''
-        d = request.form.get('choice_d') or ''
-        corr = request.form.get('correct_answer') or 'A'
-        cat_id = int(request.form.get('category_id')) if request.form.get('category_id') else None
-        row = Question(text=text, choice_a=a, choice_b=b, choice_c=c, choice_d=d,
-                       correct_answer=corr, category_id=cat_id)
+        text = (request.form.get('text') or '').strip()
+        a = (request.form.get('choice_a') or '').strip()
+        b = (request.form.get('choice_b') or '').strip()
+        c = (request.form.get('choice_c') or '').strip()
+        d = (request.form.get('choice_d') or '').strip()
+        corr = (request.form.get('correct_answer') or 'A').strip().upper()
+        cat_id = int(request.form['category_id']) if request.form.get('category_id') else None
+
+        if corr not in {"A","B","C","D"}:
+            flash("Correct answer must be A, B, C or D.", "danger")
+            return render_template("admin/question_form.html", row=None, categories=categories)
+
+        # Files
+        qi = request.files.get('question_image')  # type: FileStorage
+        ai = request.files.get('choice_a_image')
+        bi = request.files.get('choice_b_image')
+        ci = request.files.get('choice_c_image')
+        di = request.files.get('choice_d_image')
+
+        # Uploads (centralized helper)
+        q_url = _upload_file(qi, "question_stems")
+        a_url = _upload_file(ai, "choice_images")
+        b_url = _upload_file(bi, "choice_images")
+        c_url = _upload_file(ci, "choice_images")
+        d_url = _upload_file(di, "choice_images")
+
+        # If any upload failed, re-render (friendly flash already shown)
+        if "__UPLOAD_FAILED__" in {q_url, a_url, b_url, c_url, d_url}:
+            return render_template("admin/question_form.html", row=None, categories=categories)
+
+        # Require at least stem text or stem image
+        if not (text or q_url):
+            flash("Provide question text or an image.", "danger")
+            return render_template("admin/question_form.html", row=None, categories=categories)
+
+        # Each choice must have text or an image
+        def ok(txt, url): return (txt and txt.strip()) or url
+        if not all([ok(a, a_url), ok(b, b_url), ok(c, c_url), ok(d, d_url)]):
+            flash("Each choice must have text or an image.", "danger")
+            return render_template("admin/question_form.html", row=None, categories=categories)
+
+        row = Question(
+            text=text,
+            choice_a=a, choice_b=b, choice_c=c, choice_d=d,
+            correct_answer=corr, category_id=cat_id,
+            question_image_url=q_url,
+            choice_a_image_url=a_url,
+            choice_b_image_url=b_url,
+            choice_c_image_url=c_url,
+            choice_d_image_url=d_url
+        )
         db.session.add(row)
         db.session.commit()
         flash("Question created", "success")
         return redirect(url_for('admin_questions'))
+
     return render_template("admin/question_form.html", row=None, categories=categories)
 
 @app.route('/admin/questions/<int:qid>/edit', methods=['GET', 'POST'])
@@ -624,16 +750,71 @@ def admin_questions_edit(qid):
     row = Question.query.get_or_404(qid)
     categories = Category.query.all()
     if request.method == 'POST':
-        row.text = request.form.get('text') or row.text
-        row.choice_a = request.form.get('choice_a') or row.choice_a
-        row.choice_b = request.form.get('choice_b') or row.choice_b
-        row.choice_c = request.form.get('choice_c') or row.choice_c
-        row.choice_d = request.form.get('choice_d') or row.choice_d
-        row.correct_answer = request.form.get('correct_answer') or row.correct_answer
-        row.category_id = int(request.form.get('category_id')) if request.form.get('category_id') else None
+        # Text fields
+        row.text = (request.form.get('text') or '').strip()
+        row.choice_a = (request.form.get('choice_a') or '').strip()
+        row.choice_b = (request.form.get('choice_b') or '').strip()
+        row.choice_c = (request.form.get('choice_c') or '').strip()
+        row.choice_d = (request.form.get('choice_d') or '').strip()
+        row.correct_answer = (request.form.get('correct_answer') or row.correct_answer).strip().upper()
+        row.category_id = int(request.form['category_id']) if request.form.get('category_id') else None
+
+        # Removal toggles
+        rm_q = bool(request.form.get('remove_question_image'))
+        rm_a = bool(request.form.get('remove_choice_a_image'))
+        rm_b = bool(request.form.get('remove_choice_b_image'))
+        rm_c = bool(request.form.get('remove_choice_c_image'))
+        rm_d = bool(request.form.get('remove_choice_d_image'))
+
+        if rm_q: row.question_image_url = None
+        if rm_a: row.choice_a_image_url = None
+        if rm_b: row.choice_b_image_url = None
+        if rm_c: row.choice_c_image_url = None
+        if rm_d: row.choice_d_image_url = None
+
+        # New uploads (replace existing)
+        qi = request.files.get('question_image')
+        ai = request.files.get('choice_a_image')
+        bi = request.files.get('choice_b_image')
+        ci = request.files.get('choice_c_image')
+        di = request.files.get('choice_d_image')
+
+        q_url = _upload_file(qi, "question_stems")
+        a_url = _upload_file(ai, "choice_images")
+        b_url = _upload_file(bi, "choice_images")
+        c_url = _upload_file(ci, "choice_images")
+        d_url = _upload_file(di, "choice_images")
+
+        # If any upload failed, re-render (friendly flash already shown)
+        if "__UPLOAD_FAILED__" in {q_url, a_url, b_url, c_url, d_url}:
+            return render_template("admin/question_form.html", row=row, categories=categories)
+
+        if q_url: row.question_image_url = q_url
+        if a_url: row.choice_a_image_url = a_url
+        if b_url: row.choice_b_image_url = b_url
+        if c_url: row.choice_c_image_url = c_url
+        if d_url: row.choice_d_image_url = d_url
+
+        # Final validation: require stem text or image
+        if not (row.text or row.question_image_url):
+            flash("Provide question text or an image.", "danger")
+            return render_template("admin/question_form.html", row=row, categories=categories)
+
+        # Each choice must have text or image
+        def ok(txt, url): return (txt and txt.strip()) or url
+        if not all([
+            ok(row.choice_a, row.choice_a_image_url),
+            ok(row.choice_b, row.choice_b_image_url),
+            ok(row.choice_c, row.choice_c_image_url),
+            ok(row.choice_d, row.choice_d_image_url),
+        ]):
+            flash("Each choice must have text or an image.", "danger")
+            return render_template("admin/question_form.html", row=row, categories=categories)
+
         db.session.commit()
         flash("Question updated", "success")
         return redirect(url_for('admin_questions'))
+
     return render_template("admin/question_form.html", row=row, categories=categories)
 
 @app.route('/admin/questions/<int:qid>/delete', methods=['POST'])
@@ -664,6 +845,147 @@ def whoami():
         "admin": getattr(current_user, "is_admin", None),
         "session_keys": list(session.keys()),
     }
+
+# ---- One-off CLI: import questions at scale ----
+import click, json, importlib.util, pathlib
+
+def _ensure_category(name: str | None):
+    if not name:
+        return None
+    cat = Category.query.filter_by(name=name).first()
+    if not cat:
+        cat = Category(name=name)
+        db.session.add(cat)
+        db.session.flush()
+    return cat.id
+
+def _to_letter_from_index(idx: int):
+    return {0: "A", 1: "B", 2: "C", 3: "D"}.get(idx)
+
+def _normalize_item(item):
+    """
+    Accept common shapes and return:
+      text, [a,b,c,d], correct_letter, category_name
+    """
+    # text / question
+    text = (item.get("text") or item.get("question") or "").strip()
+    if not text:
+        return None
+
+    # options / choices
+    if all(k in item for k in ("choice_a", "choice_b", "choice_c", "choice_d")):
+        choices = [item["choice_a"], item["choice_b"], item["choice_c"], item["choice_d"]]
+    elif all(k in item for k in ("a", "b", "c", "d")):
+        choices = [item["a"], item["b"], item["c"], item["d"]]
+    elif isinstance(item.get("options"), list) and len(item["options"]) == 4:
+        choices = item["options"]
+    elif isinstance(item.get("choices"), list) and len(item["choices"]) == 4:
+        choices = item["choices"]
+    else:
+        return None
+
+    # correct answer: letter OR index OR exact option text
+    corr = item.get("correct_answer") or item.get("correct") or item.get("answer")
+    corr_letter = None
+    if isinstance(corr, int) and corr in (0,1,2,3):
+        corr_letter = _to_letter_from_index(corr)
+    elif isinstance(corr, str):
+        s = corr.strip()
+        # letter?
+        if s.upper() in {"A","B","C","D"}:
+            corr_letter = s.upper()
+        # numeric-string?
+        elif s.isdigit() and int(s) in (0,1,2,3):
+            corr_letter = _to_letter_from_index(int(s))
+        else:
+            # match by text
+            try:
+                idx = choices.index(s)
+                corr_letter = _to_letter_from_index(idx)
+            except ValueError:
+                corr_letter = None
+
+    if corr_letter not in {"A","B","C","D"}:
+        return None
+
+    cat_name = (item.get("category") or "").strip() or None
+    return text, choices, corr_letter, cat_name
+
+def _iter_items_from_path(path: str):
+    p = pathlib.Path(path)
+    if not p.exists():
+        raise FileNotFoundError(path)
+    if p.suffix.lower() == ".py":
+        # import module and read a top-level `questions`
+        spec = importlib.util.spec_from_file_location("qs_mod", str(p))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+        data = getattr(mod, "questions", None)
+        if not isinstance(data, (list, tuple)):
+            raise ValueError("questions.py must define a top-level list named `questions`")
+        return list(data)
+    else:
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "questions" in data and isinstance(data["questions"], list):
+            return data["questions"]
+        if isinstance(data, list):
+            return data
+        raise ValueError("JSON must be a list, or an object with `questions: [...]`")
+
+@app.cli.command("import-questions")
+@click.argument("path", type=str)
+@click.option("--default-category", default=None, help="Category to use if item has none.")
+@click.option("--skip-duplicates", is_flag=True, help="Skip if same text already exists.")
+def import_questions_cli(path, default_category, skip_duplicates):
+    """
+    Import a large questions file (JSON or Python module with `questions = [...]`).
+    Usage:
+      flask --app main import-questions ./questions.py
+    """
+    with app.app_context():
+        items = _iter_items_from_path(path)
+        seen = set()
+        imported = 0
+        skipped = 0
+
+        # Optional prefetch existing texts for duplicate check
+        existing_texts = set()
+        if skip_duplicates:
+            existing_texts = {t for (t,) in db.session.query(Question.text).all()}
+
+        for raw in items:
+            norm = _normalize_item(raw)
+            if not norm:
+                skipped += 1
+                continue
+            text, choices, corr_letter, cat_name = norm
+
+            # duplicate prevention (by text)
+            if skip_duplicates and (text in existing_texts or text in seen):
+                skipped += 1
+                continue
+
+            # map choices
+            a,b,c,d = choices
+            # category resolve/create
+            cat_id = _ensure_category(cat_name or default_category)
+
+            q = Question(text=text,
+                         choice_a=a, choice_b=b, choice_c=c, choice_d=d,
+                         correct_answer=corr_letter,
+                         category_id=cat_id)
+            db.session.add(q)
+
+            seen.add(text)
+            imported += 1
+
+            # periodic flush to keep memory/transaction in check
+            if imported % 500 == 0:
+                db.session.flush()
+
+        db.session.commit()
+        click.echo(f"Imported: {imported}, Skipped: {skipped}")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
