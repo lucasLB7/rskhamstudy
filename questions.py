@@ -2969,7 +2969,198 @@ questions = [
             "Digital modes"
         ],
         "answer": "SSB"
-    }
+    },
+    {
+    "question": "Which keying method is used to transmit CW?",
+    "options": [
+        "Frequency-shift keying (FSK) of a radio-frequency signal",
+        "On-off keying (OOK) of a radio-frequency signal",
+        "Audio-frequency-shift keying (AFSK) of an oscillator tone",
+        "On-off keying of an audio-frequency signal"
+    ],
+    "answer": "On-off keying (OOK) of a radio-frequency signal"
+},
+{
+    "question": "Which emission type describes international Morse code telegraphy messages?",
+    "options": [
+        "RTTY",
+        "Image",
+        "CW",
+        "Phone"
+    ],
+    "answer": "CW"
+},
+{
+    "question": "Which emission type describes frequency-modulated voice transmissions?",
+    "options": [
+        "FM phone",
+        "Image",
+        "CW",
+        "Single-sideband phone"
+    ],
+    "answer": "FM phone"
+},
+{
+    "question": "Which emission designator describes single-sideband suppressed-carrier voice transmission?",
+    "options": [
+        "FM",
+        "CW",
+        "SSB",
+        "RTTY"
+    ],
+    "answer": "SSB"
+},
+{
+    "question": "Which emission designator describes narrow-band direct printing telegraphy emissions?",
+    "options": [
+        "FM",
+        "CW",
+        "SSB",
+        "RTTY"
+    ],
+    "answer": "RTTY"
+},
+{
+    "question": "What does the term key click mean?",
+    "options": [
+        "The mechanical noise caused by closing a straight key too hard",
+        "The clicking noise from an excessively square CW keyed waveform",
+        "The sound produced in a receiver from a CW signal faster than 20 WPM",
+        "The sound of a CW signal being copied on an AM receiver"
+    ],
+    "answer": "The clicking noise from an excessively square CW keyed waveform"
+},
+{
+    "question": "How can key clicks be eliminated?",
+    "options": [
+        "By reducing your keying speed to less than 20 WPM",
+        "By increasing power to the maximum allowable level",
+        "By using a power supply with better regulation",
+        "By using a key-click filter"
+    ],
+    "answer": "By using a key-click filter"
+},
+{
+    "question": "What does the term chirp mean?",
+    "options": [
+        "A distortion in the receiver audio circuits",
+        "A high-pitched audio tone transmitted with a CW signal",
+        "A slight shift in oscillator frequency each time a CW transmitter is keyed",
+        "A slow change in transmitter frequency as the circuit warms up"
+    ],
+    "answer": "A slight shift in oscillator frequency each time a CW transmitter is keyed"
+},
+{
+    "question": "What can be done to a power supply of a CW transmitter to avoid chirp?",
+    "options": [
+        "Resonate the power supply filters",
+        "Regulate the power supply output voltages",
+        "Use a buffer amplifier between the transmitter output and the feed line",
+        "Hold the power supply current to a fixed value"
+    ],
+    "answer": "Regulate the power supply output voltages"
+},
+{
+    "question": "What is a common cause of superimposed hum?",
+    "options": [
+        "Using a nonresonant random-wire antenna",
+        "Sympathetic vibrations from a nearby transmitter",
+        "Improper neutralization of the transmitter output stage",
+        "A defective filter capacitor in the power supply"
+    ],
+    "answer": "A defective filter capacitor in the power supply"
+},
+{
+    "question": "What kind of problem can a bad power-supply filter capacitor cause in a transmitter or receiver?",
+    "options": [
+        "Sympathetic vibrations in nearby receivers",
+        "A superimposed hum or buzzing sound",
+        "Extreme changes in antenna resonance",
+        "Imbalance in the mixers"
+    ],
+    "answer": "A superimposed hum or buzzing sound"
+},
+{
+    "question": "What is the 4th harmonic of a 7,160 kHz signal?",
+    "options": [
+        "28,640 kHz",
+        "35,800 kHz",
+        "28,160 kHz",
+        "1,790 kHz"
+    ],
+    "answer": "28,640 kHz"
+},
+{
+    "question": "Another RSK member says he hears you on 21.225 MHz when you operate on 7.075 MHz; what is the problem?",
+    "options": [
+        "Your transmitter has a defective power-supply filter capacitor",
+        "Your CW keying speed was too fast",
+        "Your transmitter was radiating excess harmonic signals",
+        "Your transmitter has a defective power-supply filter choke"
+    ],
+    "answer": "Your transmitter was radiating excess harmonic signals"
+},
+{
+    "question": "What problem can result from operating your radio without its cover or other shielding?",
+    "options": [
+        "Spurious emissions",
+        "Chirp",
+        "Inefficient amplifier operation",
+        "Off-frequency emissions"
+    ],
+    "answer": "Spurious emissions"
+},
+{
+    "question": "What may happen if you adjust the mic gain or deviation control on your FM transmitter too high?",
+    "options": [
+        "You may cause digital interference to computer equipment",
+        "You may cause interference to other stations on nearby frequencies",
+        "You may create atmospheric interference in the air around your antenna",
+        "You may cause processor interference to the microprocessor in your rig"
+    ],
+    "answer": "You may cause interference to other stations on nearby frequencies"
+},
+{
+    "question": "What type of interference can excessive amounts of speech-processing in your SSB transmitter cause?",
+    "options": [
+        "You may cause digital interference to computer equipment",
+        "You may cause splatter interference to other stations on nearby frequencies",
+        "You may create atmospheric interference in the air around your antenna",
+        "You may cause processor interference to the microprocessor in your rig"
+    ],
+    "answer": "You may cause splatter interference to other stations on nearby frequencies"
+},
+{
+    "question": "What type of interference will you cause if you operate your SSB transmitter with the microphone gain adjusted too high?",
+    "options": [
+        "You may cause digital interference to computer equipment",
+        "You may cause processor interference to the microprocessor in your rig",
+        "You may create atmospheric interference in the air around your antenna",
+        "You may cause splatter interference to other stations on nearby frequencies"
+    ],
+    "answer": "You may cause splatter interference to other stations on nearby frequencies"
+},
+{
+    "question": "Your tube type amplifier is radiating spurious emissions. What is the most likely cause?",
+    "options": [
+        "Excessively fast keying speed",
+        "Undermodulation",
+        "Improper neutralization",
+        "Tank-circuit current dip at resonance"
+    ],
+    "answer": "Improper neutralization"
+},
+{
+    "question": "What can happen to body tissues that are exposed to large amounts of UHF or microwave RF energy?",
+    "options": [
+        "The tissue may be damaged due to heat produced",
+        "The tissue may suddenly be frozen",
+        "The tissue may be immediately destroyed",
+        "The tissue may become less resistant to cosmic radiation"
+    ],
+    "answer": "The tissue may be damaged due to heat produced"
+}
+
 
 
        

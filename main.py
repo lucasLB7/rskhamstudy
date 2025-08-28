@@ -253,44 +253,49 @@ def index():
 # Login/Logout
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        email = (request.form.get('email') or '').strip().lower()
-        password = request.form.get('password') or ''
-        user = User.query.filter_by(email=email).first()
-        if not user or not user.check_password(password):
-            flash("Invalid credentials", "danger")
-            return render_template("login.html")
+    # If already logged in, send to the right place
+    if request.method == 'GET':
+        if current_user.is_authenticated:
+            return redirect(url_for('admin_home') if current_user.is_admin else url_for('index'))
+        return render_template("login.html")  # <-- IMPORTANT: return!
 
-        login_user(user)
-        flash("Welcome back!", "success")
+    # POST: authenticate
+    email = (request.form.get('email') or '').strip().lower()
+    password = request.form.get('password') or ''
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.check_password(password):
+        flash("Invalid credentials", "danger")
+        return render_template("login.html")  # <-- return on failure
 
-        # --- Last login handling ---
-        fmt = "%b %d, %Y %H:%M"
-        prev_display = None
-        try:
-            if hasattr(User, "last_login_at"):
-                prev = getattr(user, "last_login_at", None)
-                if prev:
-                    try:
-                        prev_display = prev.astimezone().strftime(fmt)
-                    except Exception:
-                        prev_display = prev.strftime(fmt)
-                user.last_login_at = datetime.now(timezone.utc)
-                db.session.commit()
-            else:
-                prev_display = session.get("last_login_current")
-                session["last_login_current"] = datetime.now().strftime(fmt)
-        except Exception:
+    login_user(user)
+    flash("Welcome back!", "success")
+
+    # Optional: last login tracking (kept from your code)
+    fmt = "%b %d, %Y %H:%M"
+    prev_display = None
+    try:
+        if hasattr(User, "last_login_at"):
+            prev = getattr(user, "last_login_at", None)
+            if prev:
+                try:
+                    prev_display = prev.astimezone().strftime(fmt)
+                except Exception:
+                    prev_display = prev.strftime(fmt)
+            user.last_login_at = datetime.now(timezone.utc)
+            db.session.commit()
+        else:
             prev_display = session.get("last_login_current")
-        session["last_login_display"] = prev_display
-        # --- /Last login handling ---
+            session["last_login_current"] = datetime.now().strftime(fmt)
+    except Exception:
+        prev_display = session.get("last_login_current")
+    session["last_login_display"] = prev_display
 
-        next_url = request.args.get('next')
-        if not next_url:
-            next_url = url_for('admin_home') if user.is_admin else url_for('start', mode='study')
-        return redirect(next_url)
+    # Redirect target
+    next_url = request.args.get('next')
+    if not next_url:
+        next_url = url_for('admin_home') if user.is_admin else url_for('index')
+    return redirect(next_url)
 
-    return render_template("login.html")
 
 @app.route('/logout')
 @login_required
@@ -421,17 +426,28 @@ def quiz():
             wrong_ids = set(session.get('wrong_ids', []))
             wrong_ids.add(current_id)
             session['wrong_ids'] = list(wrong_ids)
+
             lc = session.get('last_choice', {})
             lc[str(current_id)] = selected
             session['last_choice'] = lc
 
-            # immediate repeat feature:
-            if serving_from_queue:
-                failed = study_queue.pop(0)
-                study_queue.insert(0, failed)
+            # One-shot suppression of the "previously wrong" banner on the immediate re-render
+            session['suppress_repeat_banner'] = current_id
+
+            if mode == 'study':
+                # Re-queue to the END (avoid double-in-a-row)
+                if serving_from_queue:
+                    failed = study_queue.pop(0)
+                    study_queue.append(failed)
+                else:
+                    if current_id not in study_queue:
+                        study_queue.append(current_id)
+                # Don't advance cursor here; we'll see other items first
             else:
-                if current_id not in study_queue:
-                    study_queue.insert(0, current_id)
+                # Exam/Test mode: record and move on; no immediate repeat
+                if serving_from_queue:
+                    study_queue.pop(0)
+                cursor += 1
 
         session['cursor'] = cursor
         session['study_queue'] = study_queue
@@ -446,7 +462,12 @@ def quiz():
 
     total = cap
     number = min(cursor + 1, total)
-    repeat = current_id in set(session.get('wrong_ids', []))
+
+    # Show yellow banner for previously wrong,
+    # except suppress it once immediately after a wrong submission
+    wrong_ids_set = set(session.get('wrong_ids', []))
+    suppress_id = session.pop('suppress_repeat_banner', None)
+    repeat = (current_id in wrong_ids_set) and (suppress_id is None or current_id != suppress_id)
 
     return render_template(
         "quiz.html",

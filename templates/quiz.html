@@ -18,17 +18,8 @@
     min-height: 64px;
   }
   .choice:hover label { border-color:#bfc4d1; box-shadow:0 8px 24px rgba(0,0,0,.04); }
-  .dot {
-    display:inline-flex; align-items:center; justify-content:center;
-    width:28px; height:28px; border-radius:50%; border:1px solid #c9ceda; font-weight:600; font-size:.9rem;
-    background:#f8f9fc;
-    /* letters hidden; numbers shown (we render 1–4) */
-  }
   .choice input:checked + label {
     border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.15);
-  }
-  .choice input:checked + label .dot {
-    background:#0d6efd; color:#fff; border-color:#0d6efd;
   }
   .progress { height:.6rem; background:#eef1f6; }
   .progress-bar { background:#0d6efd; }
@@ -89,19 +80,17 @@
       {% endif %}
     </div>
 
-    <!-- Options -->
+    <!-- Options (no badges/letters/numbers) -->
     <form id="quiz-form" method="POST" novalidate>
       <div class="choice-grid">
-        {# options are tuples: (letter, text, image_url?) but user shouldn't see the letter #}
         {% for item in options %}
           {% set letter = item[0] %}
           {% set text = item[1] if item|length > 1 else '' %}
           {% set img  = item[2] if item|length > 2 else None %}
           <div class="choice">
+            <!-- still submit the hidden letter so backend logic is unchanged -->
             <input id="opt-{{ loop.index }}" type="radio" name="answer" value="{{ letter }}" required>
             <label for="opt-{{ loop.index }}">
-              {# show 1–4 badge instead of A–D #}
-              <span class="dot">{{ loop.index }}</span>
               <span class="d-flex flex-column gap-2 w-100">
                 {% if img %}
                   <img src="{{ img }}" alt="Option image" loading="lazy">
@@ -134,7 +123,7 @@
     {% endif %}
 
     <div class="text-center text-muted small mt-4">
-      Tip: use keys <kbd>1</kbd>–<kbd>4</kbd> to select an option, then <kbd>Enter</kbd> to submit.
+      Tip: select an option, then press <kbd>Enter</kbd> to submit.
     </div>
   </div>
 </div>
@@ -151,11 +140,8 @@
     radios.forEach(r => r.addEventListener('change', updateButton));
     updateButton();
 
-    // Map keys 1–4 to the first/second/third/fourth visible option (NOT A–D)
+    // Enter submits when something is selected
     document.addEventListener('keydown', function (e) {
-      if (!/^[1-4]$/.test(e.key)) return;
-      const idx = parseInt(e.key, 10) - 1;
-      if (radios[idx]) { radios[idx].click(); }
       if (e.key === 'Enter' && !submitBtn.disabled) {
         form.submit();
       }
